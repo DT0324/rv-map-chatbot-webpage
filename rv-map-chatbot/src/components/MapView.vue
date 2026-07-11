@@ -62,6 +62,7 @@ const deviceLngLat = ref('正在获取定位...')
 let deviceMarker = null
 let targetMarker = null
 let pendingFlyTarget = null
+let shopMarkers = []
 const props = defineProps({
   flyToTarget: Object,
 })
@@ -90,7 +91,104 @@ const executeMoveLogic = () => {
   console.log('当前屏幕可视边界，准备发送给 AWS 后端：')
   console.log(`西南角: [${sw.lng}, ${sw.lat}], 东北角: [${ne.lng}, ${ne.lat}]`)
   // 💡 下一步：在这里调用你的 AWS API Gateway，把这两个坐标对传给 Lambda
-  // fetchShopsFromAWS(sw.lng, sw.lat, ne.lng, ne.lat)
+  // 调用 AWS API 获取店铺数据
+  fetchShopsFromAWS(sw.lng, sw.lat, ne.lng, ne.lat)
+}
+
+// AWS API 配置：在此填写你的 x-api-key
+const AWS_API_BASE = 'https://ukvberwf88.execute-api.ap-southeast-2.amazonaws.com/dev/getShops'
+const AWS_API_KEY = '7HDLyOvfOj3FUz8H7K5V72NQt10YAnpk1JJJ93QK' // <-- 填入 x-api-key
+
+/**
+ * 使用 GET 请求从 AWS API 获取店铺数据
+ * 参数名采用 API 要求的查询字符串：swLng, swLat, neLng, neLat
+ */
+const fetchShopsFromAWS = async (swLng, swLat, neLng, neLat) => {
+  try {
+    const url = `${AWS_API_BASE}?swLng=${encodeURIComponent(swLng)}&swLat=${encodeURIComponent(swLat)}&neLng=${encodeURIComponent(neLng)}&neLat=${encodeURIComponent(neLat)}`
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'x-api-key': AWS_API_KEY,
+      },
+    })
+
+    if (!res.ok) {
+      console.error('AWS API 返回错误：', res.status, res.statusText)
+      return null
+    }
+
+    const data = await res.json()
+    console.log('从 AWS 获取到的店铺数据：', data)
+
+    // 如果返回结构中包含数组（如 data.shops），更新服务点显示文字
+    if (Array.isArray(data.shops)) {
+      servicePointText.value = `Showing ${data.shops.length} Service Point${data.shops.length !== 1 ? 's' : ''}`
+    } else if (Array.isArray(data)) {
+      servicePointText.value = `Showing ${data.length} Service Point${data.length !== 1 ? 's' : ''}`
+    } else {
+      servicePointText.value = 'Showing results'
+    }
+
+    // TODO: 根据返回的数据在地图上绘制 marker（如果需要）
+    const shops = Array.isArray(data.shops) ? data.shops : (Array.isArray(data) ? data : [])
+    renderShopMarkers(shops)
+    return data
+  } catch (err) {
+    console.error('fetchShopsFromAWS 错误：', err)
+    return null
+  }
+}
+
+// Remove existing shop markers from the map
+const removeShopMarkers = () => {
+  if (!shopMarkers || !shopMarkers.length) return
+  shopMarkers.forEach((m) => m.remove())
+  shopMarkers = []
+}
+
+// Create a pin element (SVG) filled with the site's accent color
+const createPinElement = (fillColor = '#aa3bff') => {
+  const el = document.createElement('div')
+  el.className = 'shop-pin'
+  // Inline SVG pin (keeps CSS simple and allows fill customization)
+  el.innerHTML = `
+    <svg viewBox="0 0 24 24" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5A2.5 2.5 0 1112 6a2.5 2.5 0 010 5.5z" fill="${fillColor}" stroke="white" stroke-width="1" />
+    </svg>
+  `
+  return el
+}
+
+// Render shop markers from API results
+const renderShopMarkers = (shops = []) => {
+  if (!map.value) return
+  removeShopMarkers()
+
+  // try to read accent color from CSS variables
+  const cssAccent = getComputedStyle(document.documentElement).getPropertyValue('--accent') || ''
+  const accent = cssAccent.trim() || '#aa3bff'
+
+  shops.forEach((shop) => {
+    const lat = Number(shop.latitude ?? shop.lat)
+    const lng = Number(shop.longitude ?? shop.lng)
+    if (!isFinite(lat) || !isFinite(lng)) return
+
+    const pinEl = createPinElement(accent)
+
+    const marker = new mapboxgl.Marker({ element: pinEl, anchor: 'bottom' })
+      .setLngLat([lng, lat])
+      .addTo(map.value)
+
+    // optional popup with name and description
+    const info = `<strong>${shop.name || ''}</strong><div>${shop.description || ''}</div><div><a href="${shop.link || '#'}" target="_blank" rel="noopener">Open in maps</a></div>`
+    const popup = new mapboxgl.Popup({ offset: 12 }).setHTML(info)
+
+    pinEl.addEventListener('click', () => popup.addTo(map.value).setLngLat([lng, lat]))
+
+    shopMarkers.push(marker)
+  })
 }
 
 const searchThisArea = () => {
@@ -536,5 +634,17 @@ onBeforeUnmount(() => {
   100% {
     opacity: 0;
   }
+}
+
+.shop-pin {
+  width: 28px;
+  height: 28px;
+  display: inline-block;
+  line-height: 0;
+  cursor: pointer;
+  will-change: transform;
+}
+.shop-pin svg {
+  display: block;
 }
 </style>
