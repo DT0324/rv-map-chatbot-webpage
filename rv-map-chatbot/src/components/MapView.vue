@@ -131,7 +131,6 @@ const fetchShopsFromAWS = async (swLng, swLat, neLng, neLat) => {
       servicePointText.value = 'Showing results'
     }
 
-    // TODO: 根据返回的数据在地图上绘制 marker（如果需要）
     const shops = Array.isArray(data.shops) ? data.shops : (Array.isArray(data) ? data : [])
     renderShopMarkers(shops)
     return data
@@ -148,36 +147,32 @@ const removeShopMarkers = () => {
   shopMarkers = []
 }
 
-// Create a pin element (SVG) filled with the site's accent color
-const createPinElement = (fillColor = '#aa3bff') => {
+// Create a simple circular marker element using the site's accent color
+const createCircleElement = (fillColor = '#aa3bff') => {
   const el = document.createElement('div')
-  el.className = 'shop-pin'
-  // Inline SVG pin (keeps CSS simple and allows fill customization)
-  el.innerHTML = `
-    <svg viewBox="0 0 24 24" width="28" height="28" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5A2.5 2.5 0 1112 6a2.5 2.5 0 010 5.5z" fill="${fillColor}" stroke="white" stroke-width="1" />
-    </svg>
-  `
+  el.className = 'shop-marker'
+  // apply inline background color so each marker can use the accent
+  el.style.background = fillColor
   return el
 }
 
 // Render shop markers from API results
 const renderShopMarkers = (shops = []) => {
   if (!map.value) return
+  console.log('renderShopMarkers called with', shops.length, 'shops')
   removeShopMarkers()
 
   // try to read accent color from CSS variables
   const cssAccent = getComputedStyle(document.documentElement).getPropertyValue('--accent') || ''
   const accent = cssAccent.trim() || '#aa3bff'
 
-  shops.forEach((shop) => {
+    shops.forEach((shop) => {
     const lat = Number(shop.latitude ?? shop.lat)
     const lng = Number(shop.longitude ?? shop.lng)
     if (!isFinite(lat) || !isFinite(lng)) return
+    const pinEl = createCircleElement(accent)
 
-    const pinEl = createPinElement(accent)
-
-    const marker = new mapboxgl.Marker({ element: pinEl, anchor: 'bottom' })
+    const marker = new mapboxgl.Marker({ element: pinEl, anchor: 'center' })
       .setLngLat([lng, lat])
       .addTo(map.value)
 
@@ -636,15 +631,15 @@ onBeforeUnmount(() => {
   }
 }
 
-.shop-pin {
-  width: 28px;
-  height: 28px;
+.shop-marker {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
   display: inline-block;
   line-height: 0;
   cursor: pointer;
   will-change: transform;
-}
-.shop-pin svg {
-  display: block;
+  border: 2px solid rgba(255,255,255,0.95);
+  box-shadow: 0 6px 12px rgba(0,0,0,0.18);
 }
 </style>
