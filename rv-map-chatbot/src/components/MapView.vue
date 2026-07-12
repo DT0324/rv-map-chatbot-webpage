@@ -188,7 +188,7 @@ const renderShopMarkers = (shops = []) => {
       <div class="shop-popup">
         <h3>${shop.name || ''}</h3>
         <p>${shop.description || ''}</p>
-        <a href="${shop.link || '#'}" target="_blank">查看地图</a>
+        <a href="${shop.link || '#'}" target="_blank">Check in Google Maps</a>
       </div>
     `
 
