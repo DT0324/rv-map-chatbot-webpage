@@ -9,5 +9,50 @@
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
+    <!-- Tawk.to chat widget (positioned to left-bottom) -->
+    <!--Start of Tawk.to Script-->
+    <script type="text/javascript">
+    var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
+    (function(){
+    var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
+    s1.async=true;
+    s1.src='https://embed.tawk.to/6a5357ab4e30b91d4a8528f3/1jtaostle';
+    s1.charset='UTF-8';
+    s1.setAttribute('crossorigin','*');
+    s0.parentNode.insertBefore(s1,s0);
+    })();
+    </script>
+    <!--End of Tawk.to Script-->
+
+    <!-- Reposition Tawk widget to left-bottom when it appears -->
+    <script>
+    (function repositionTawk() {
+      const tryReposition = () => {
+        // common injected structures: find iframe or Tawk container
+        const iframe = document.querySelector('iframe[src*="tawk.to"]');
+        let container = null;
+        if (iframe) container = iframe.closest('div');
+        if (!container) container = document.querySelector('div[id^="tawk"]') || document.querySelector('.tawk-min-container') || document.querySelector('#tawkchat-maximized');
+        if (container) {
+          container.style.right = 'auto';
+          container.style.left = '18px';
+          container.style.bottom = '18px';
+          container.style.top = 'auto';
+          container.style.zIndex = '99999';
+          container.style.maxWidth = '340px';
+          return true;
+        }
+        return false;
+      };
+
+      const interval = setInterval(() => {
+        if (tryReposition()) clearInterval(interval);
+      }, 400);
+      // also attempt once on window load
+      window.addEventListener('load', tryReposition);
+      // stop trying after 12s
+      setTimeout(() => clearInterval(interval), 12000);
+    })();
+    </script>
   </body>
 </html>

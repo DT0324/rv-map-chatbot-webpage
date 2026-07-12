@@ -461,7 +461,7 @@ const initMap = (centerCoordinates, deviceCoordinates = null) => {
   })
 
   // 添加地图自带的导航控制条（放大、缩小、旋转）
-  map.value.addControl(new mapboxgl.NavigationControl(), 'bottom-right')
+  map.value.addControl(new mapboxgl.NavigationControl(), 'bottom-left')
 
   map.value.on('load', () => {
     formatCenterText(map.value.getCenter())
