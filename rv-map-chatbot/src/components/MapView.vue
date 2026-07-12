@@ -17,7 +17,10 @@
 
     <div class="map-button map-button-center" :class="{ alert: !updateOnMove && showMoveAlert }">
       <template v-if="updateOnMove">
-        {{ servicePointText }}
+        <span class="search-status" :class="{ active: isSearching }">
+          <span class="search-dot"></span>
+          {{ servicePointText }}
+        </span>
       </template>
       <template v-else>
         <div class="move-status">
@@ -67,7 +70,8 @@ const props = defineProps({
   flyToTarget: Object,
 })
 
-const servicePointText = ref('Showing xx of xxx Service Point')
+const servicePointText = ref('Searching for service points...')
+const isSearching = ref(false)
 const updateOnMove = ref(true)
 const showMoveAlert = ref(false)
 
@@ -90,15 +94,12 @@ const executeMoveLogic = () => {
 
   console.log('当前屏幕可视边界，准备发送给 AWS 后端：')
   console.log(`西南角: [${sw.lng}, ${sw.lat}], 东北角: [${ne.lng}, ${ne.lat}]`)
-  // 💡 下一步：在这里调用你的 AWS API Gateway，把这两个坐标对传给 Lambda
-  // 调用 AWS API 获取店铺数据
   fetchShopsFromAWS(sw.lng, sw.lat, ne.lng, ne.lat)
 }
 
-// AWS API 配置：在此填写你的 x-api-key
-const AWS_API_BASE = 'https://ukvberwf88.execute-api.ap-southeast-2.amazonaws.com/dev/getShops'
-const AWS_API_KEY = '7HDLyOvfOj3FUz8H7K5V72NQt10YAnpk1JJJ93QK' // <-- 填入 x-api-key
 
+const AWS_API_BASE = 'https://ukvberwf88.execute-api.ap-southeast-2.amazonaws.com/dev/getShops'
+const AWS_API_KEY = '7HDLyOvfOj3FUz8H7K5V72NQt10YAnpk1JJJ93QK' 
 /**
  * 使用 GET 请求从 AWS API 获取店铺数据
  * 参数名采用 API 要求的查询字符串：swLng, swLat, neLng, neLat
@@ -107,6 +108,7 @@ const fetchShopsFromAWS = async (swLng, swLat, neLng, neLat) => {
   try {
     const url = `${AWS_API_BASE}?swLng=${encodeURIComponent(swLng)}&swLat=${encodeURIComponent(swLat)}&neLng=${encodeURIComponent(neLng)}&neLat=${encodeURIComponent(neLat)}`
 
+    isSearching.value = true
     const res = await fetch(url, {
       method: 'GET',
       headers: {
@@ -122,21 +124,27 @@ const fetchShopsFromAWS = async (swLng, swLat, neLng, neLat) => {
     const data = await res.json()
     console.log('从 AWS 获取到的店铺数据：', data)
 
-    // 如果返回结构中包含数组（如 data.shops），更新服务点显示文字
-    if (Array.isArray(data.shops)) {
-      servicePointText.value = `Showing ${data.shops.length} Service Point${data.shops.length !== 1 ? 's' : ''}`
-    } else if (Array.isArray(data)) {
-      servicePointText.value = `Showing ${data.length} Service Point${data.length !== 1 ? 's' : ''}`
+    // API may return { data: [...], count } or plain array or { shops: [...] }
+    let shops = []
+    if (Array.isArray(data.shops)) shops = data.shops
+    else if (Array.isArray(data.data)) shops = data.data
+    else if (Array.isArray(data)) shops = data
+
+    const totalShops = Number.isFinite(Number(data.count)) ? Number(data.count) : shops.length
+    if (shops.length === 0) {
+      servicePointText.value = 'There is no available service point near this location, please move the map to search for more'
     } else {
-      servicePointText.value = 'Showing results'
+      servicePointText.value = `Showing ${shops.length} of ${totalShops} Service Point${shops.length !== 1 ? 's' : ''}`
     }
 
-    const shops = Array.isArray(data.shops) ? data.shops : (Array.isArray(data) ? data : [])
+    console.log('normalized shops length:', shops.length)
     renderShopMarkers(shops)
     return data
   } catch (err) {
     console.error('fetchShopsFromAWS 错误：', err)
     return null
+  } finally {
+    isSearching.value = false
   }
 }
 
@@ -176,11 +184,19 @@ const renderShopMarkers = (shops = []) => {
       .setLngLat([lng, lat])
       .addTo(map.value)
 
-    // optional popup with name and description
-    const info = `<strong>${shop.name || ''}</strong><div>${shop.description || ''}</div><div><a href="${shop.link || '#'}" target="_blank" rel="noopener">Open in maps</a></div>`
-    const popup = new mapboxgl.Popup({ offset: 12 }).setHTML(info)
+    const htmlString = `
+      <div class="shop-popup">
+        <h3>${shop.name || ''}</h3>
+        <p>${shop.description || ''}</p>
+        <a href="${shop.link || '#'}" target="_blank">查看地图</a>
+      </div>
+    `
 
-    pinEl.addEventListener('click', () => popup.addTo(map.value).setLngLat([lng, lat]))
+    const popup = new mapboxgl.Popup({ offset: 12, closeButton: true, closeOnClick: true })
+      .setHTML(htmlString)
+
+    marker.setPopup(popup)
+    pinEl.addEventListener('click', () => marker.togglePopup())
 
     shopMarkers.push(marker)
   })
@@ -352,9 +368,35 @@ onBeforeUnmount(() => {
   max-width: 300px;
 }
 
-.status-bar p {
-  margin: 5px 0;
-  font-size: 14px;
+.search-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(170, 59, 255, 0.4);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.search-status.active .search-dot {
+  animation: searchPulse 1s infinite ease-in-out;
+}
+
+@keyframes searchPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(170, 59, 255, 0.4);
+  }
+  50% {
+    transform: scale(1.2);
+    box-shadow: 0 0 0 4px rgba(170, 59, 255, 0.12);
+  }
 }
 
 .coord-overlay {
@@ -641,5 +683,30 @@ onBeforeUnmount(() => {
   will-change: transform;
   border: 2px solid rgba(255,255,255,0.95);
   box-shadow: 0 6px 12px rgba(0,0,0,0.18);
+}
+
+.shop-popup {
+  font-family: sans-serif;
+  color: #111;
+  max-width: 220px;
+}
+
+.shop-popup h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.shop-popup p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #4b5563;
+}
+
+.shop-popup a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
 }
 </style>
