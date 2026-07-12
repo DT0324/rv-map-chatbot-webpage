@@ -1,6 +1,6 @@
 <template>
   <div class="map-wrapper">
-    <div ref="mapContainer" class="map-container"></div>
+    <div v-if="!(isMobile && mobileViewMode === 'list')" ref="mapContainer" class="map-container"></div>
 
     <button
       type="button"
@@ -33,25 +33,62 @@
           >
             Search this area
           </button>
-          <span v-else class="move-paused-text">Move the map to search this area.</span>
+          <span v-else class="move-paused-text">{{ servicePointText }}</span>
         </div>
       </template>
     </div>
 
-    <div class="coord-overlay">
-      <div class="coord-title">当前设备位置</div>
-      <div class="coord-value">{{ deviceLngLat }}</div>
+    <!-- Right-hand shop list: shows closest shops and supports infinite scroll -->
+    <div v-if="!(isMobile && mobileViewMode === 'map')" class="shop-list">
+      <div class="shop-list-header">
+          <div class="shop-header-title inline">
+            Service point near
+            <button
+              type="button"
+              class="inline-btn"
+              :class="{ active: listMode === 'nearby' }"
+              @click="setListMode('nearby')"
+            >
+              current
+            </button>
+            <span class="sep">/</span>
+            <button
+              type="button"
+              class="inline-btn"
+              :class="{ active: listMode === 'searched', disabled: !canUseSearchCoordinates }"
+              :disabled="!canUseSearchCoordinates"
+              @click="setListMode('searched')"
+            >
+              searched
+            </button>
+            location
+          </div>
+        </div>
+      <ul class="shop-list-items">
+        <li v-for="(shop, idx) in visibleShops" :key="idx" class="shop-list-item" @click="openShopFromList(idx)">
+          <div class="shop-item-left">
+            <div class="shop-name">{{ shop.name }}</div>
+            <div class="shop-desc">{{ shop.description }}</div>
+          </div>
+          <div class="shop-item-right">{{ shop.distance != null ? Number(shop.distance).toFixed(2) + ' km' : '-' }}</div>
+        </li>
+      </ul>
+      <div v-if="visibleShops.length < latestShops.length" class="shop-list-loading">
+        <button type="button" class="load-more-btn" @click="loadMore">Load more</button>
+      </div>
     </div>
 
-    <div class="status-bar">
-      <p><strong>当前地图中心：</strong> {{ centerLngLat }}</p>
-      <p class="tip">提示：拖拽或放大缩小地图，即可触发范围更新</p>
+    <!-- Mobile mode switch (visible on small screens) -->
+    <div class="mobile-switch" v-if="isMobile">
+      <button :class="{ active: mobileViewMode === 'map' }" @click="setMobileMode('map')">Map</button>
+      <button :class="{ active: mobileViewMode === 'list' }" @click="setMobileMode('list')">List</button>
     </div>
+
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css' // 必须引入样式，否则地图会错位
 
@@ -62,18 +99,49 @@ const mapContainer = ref(null)
 const map = ref(null)
 const centerLngLat = ref('正在获取定位...')
 const deviceLngLat = ref('正在获取定位...')
+const deviceCoords = ref(null)
 let deviceMarker = null
 let targetMarker = null
 let pendingFlyTarget = null
 let shopMarkers = []
+const latestShops = ref([])
+const visibleCount = ref(5)
+const visibleShops = computed(() => latestShops.value.slice(0, visibleCount.value))
+const listMode = ref('nearby')
+const searchedLocation = ref(null)
+const searchedPlaceName = ref('')
 const props = defineProps({
   flyToTarget: Object,
 })
 
+// Mobile view state: 'map' or 'list'
+const isMobile = ref(false)
+const mobileViewMode = ref('map')
+
+const setMobileMode = (mode) => {
+  if (mode !== 'map' && mode !== 'list') return
+  mobileViewMode.value = mode
+}
+
+const updateIsMobile = () => {
+  isMobile.value = window.matchMedia('(max-width: 640px)').matches
+  // when switching to desktop size, ensure map/list are visible
+  if (!isMobile.value) mobileViewMode.value = 'map'
+}
+
 const servicePointText = ref('Searching for service points...')
 const isSearching = ref(false)
-const updateOnMove = ref(true)
+const updateOnMove = ref(false)
 const showMoveAlert = ref(false)
+
+const canUseSearchCoordinates = computed(() => Array.isArray(searchedLocation.value) && searchedLocation.value.length === 2)
+const listHeaderText = computed(() => {
+  if (listMode.value === 'searched' && canUseSearchCoordinates.value) {
+    return 'Service Point Near the Searched Address'
+  }
+  return 'Nearby Service Points'
+})
+const listToggleLabel = computed(() => (listMode.value === 'searched' ? 'Use device location' : 'Use searched address'))
 
 const toggleUpdateOnMove = () => {
   updateOnMove.value = !updateOnMove.value
@@ -81,6 +149,27 @@ const toggleUpdateOnMove = () => {
     showMoveAlert.value = false
   }
 }
+
+const toggleListMode = () => {
+  if (!canUseSearchCoordinates.value) return
+  listMode.value = listMode.value === 'nearby' ? 'searched' : 'nearby'
+  if (map.value) {
+    executeMoveLogic()
+  }
+}
+
+const setListMode = (mode) => {
+  if (mode === 'searched' && !canUseSearchCoordinates.value) return
+  if (mode !== 'searched' && mode !== 'nearby') return
+  listMode.value = mode
+  if (map.value) executeMoveLogic()
+}
+
+watch(canUseSearchCoordinates, (available) => {
+  if (!available && listMode.value === 'searched') {
+    listMode.value = 'nearby'
+  }
+})
 
 const executeMoveLogic = () => {
   if (!map.value) return
@@ -106,7 +195,13 @@ const AWS_API_KEY = '7HDLyOvfOj3FUz8H7K5V72NQt10YAnpk1JJJ93QK'
  */
 const fetchShopsFromAWS = async (swLng, swLat, neLng, neLat) => {
   try {
-    const url = `${AWS_API_BASE}?swLng=${encodeURIComponent(swLng)}&swLat=${encodeURIComponent(swLat)}&neLng=${encodeURIComponent(neLng)}&neLat=${encodeURIComponent(neLat)}`
+    let url = `${AWS_API_BASE}?swLng=${encodeURIComponent(swLng)}&swLat=${encodeURIComponent(swLat)}&neLng=${encodeURIComponent(neLng)}&neLat=${encodeURIComponent(neLat)}`
+    // 如果已知用户坐标，附加到请求以便后端计算距离和排序
+    const sourceCoords = listMode.value === 'searched' && canUseSearchCoordinates.value ? searchedLocation.value : deviceCoords.value
+    if (sourceCoords && Array.isArray(sourceCoords) && sourceCoords.length === 2) {
+      const [uLng, uLat] = sourceCoords
+      url += `&userLng=${encodeURIComponent(uLng)}&userLat=${encodeURIComponent(uLat)}`
+    }
 
     isSearching.value = true
     const res = await fetch(url, {
@@ -138,7 +233,23 @@ const fetchShopsFromAWS = async (swLng, swLat, neLng, neLat) => {
     }
 
     console.log('normalized shops length:', shops.length)
-    renderShopMarkers(shops)
+
+    // ensure shops are stored and presented sorted by distance when available
+    if (shops && shops.length) {
+      const shopsSorted = shops.slice().sort((a, b) => {
+        const da = a.distance != null ? Number(a.distance) : Infinity
+        const db = b.distance != null ? Number(b.distance) : Infinity
+        return da - db
+      })
+      latestShops.value = shopsSorted
+      visibleCount.value = Math.min(5, shopsSorted.length)
+      renderShopMarkers(shopsSorted)
+    } else {
+      latestShops.value = []
+      visibleCount.value = 0
+      renderShopMarkers([])
+    }
+
     return data
   } catch (err) {
     console.error('fetchShopsFromAWS 错误：', err)
@@ -151,7 +262,11 @@ const fetchShopsFromAWS = async (swLng, swLat, neLng, neLat) => {
 // Remove existing shop markers from the map
 const removeShopMarkers = () => {
   if (!shopMarkers || !shopMarkers.length) return
-  shopMarkers.forEach((m) => m.remove())
+  shopMarkers.forEach((entry) => {
+    if (!entry) return
+    const m = entry.marker || entry
+    if (m && typeof m.remove === 'function') m.remove()
+  })
   shopMarkers = []
 }
 
@@ -174,7 +289,7 @@ const renderShopMarkers = (shops = []) => {
   const cssAccent = getComputedStyle(document.documentElement).getPropertyValue('--accent') || ''
   const accent = cssAccent.trim() || '#aa3bff'
 
-    shops.forEach((shop) => {
+  shops.forEach((shop) => {
     const lat = Number(shop.latitude ?? shop.lat)
     const lng = Number(shop.longitude ?? shop.lng)
     if (!isFinite(lat) || !isFinite(lng)) return
@@ -184,22 +299,49 @@ const renderShopMarkers = (shops = []) => {
       .setLngLat([lng, lat])
       .addTo(map.value)
 
+    const distanceText = shop.distance != null ? `${Number(shop.distance).toFixed(2)} km` : ''
     const htmlString = `
       <div class="shop-popup">
         <h3>${shop.name || ''}</h3>
         <p>${shop.description || ''}</p>
-        <a href="${shop.link || '#'}" target="_blank">Check in Google Maps</a>
+        <div class="shop-distance">${distanceText}</div>
+        <a href="${shop.link || '#'}" target="_blank">查看地图</a>
       </div>
     `
-
     const popup = new mapboxgl.Popup({ offset: 12, closeButton: true, closeOnClick: true })
       .setHTML(htmlString)
 
     marker.setPopup(popup)
     pinEl.addEventListener('click', () => marker.togglePopup())
 
-    shopMarkers.push(marker)
+    shopMarkers.push({ marker, shop })
   })
+}
+
+// List scrolling: load more when near bottom
+const onListScroll = (e) => {
+  const el = e.target
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 20) {
+    visibleCount.value = Math.min(latestShops.value.length, visibleCount.value + 5)
+  }
+}
+
+// Click handler for loading more items
+const loadMore = () => {
+  visibleCount.value = Math.min(latestShops.value.length, visibleCount.value + 5)
+}
+
+// Open a shop from the right-hand list: fly to and open its popup
+const openShopFromList = (index) => {
+  const shop = visibleShops.value[index]
+  if (!shop || !map.value) return
+  const lat = Number(shop.latitude ?? shop.lat)
+  const lng = Number(shop.longitude ?? shop.lng)
+  if (isFinite(lat) && isFinite(lng)) {
+    map.value.flyTo({ center: [lng, lat], zoom: 14, speed: 1.2, curve: 1.4, essential: true })
+  }
+  const entry = shopMarkers.find((e) => e.shop && Number(e.shop.latitude) === Number(shop.latitude) && Number(e.shop.longitude) === Number(shop.longitude) && e.shop.name === shop.name)
+  if (entry && entry.marker) entry.marker.togglePopup()
 }
 
 const searchThisArea = () => {
@@ -236,6 +378,8 @@ watch(
   () => props.flyToTarget,
   (next, prev) => {
     if (next && next.location?.length === 2) {
+      searchedLocation.value = next.location
+      searchedPlaceName.value = next.name || ''
       flyToLocation(next)
     }
   }
@@ -280,11 +424,19 @@ const setTargetMarker = (location) => {
 const defaultCenter = [144.9631, -37.8136] 
 
 onMounted(() => {
+  updateIsMobile()
+  const mq = window.matchMedia('(max-width: 640px)')
+  try {
+    mq.addEventListener('change', updateIsMobile)
+  } catch (e) {
+    mq.addListener(updateIsMobile)
+  }
   // 2. 尝试获取浏览器当前用户的真实定位
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { longitude, latitude } = position.coords
+        deviceCoords.value = [longitude, latitude]
         initMap([longitude, latitude], [longitude, latitude])
       },
       (error) => {
@@ -314,6 +466,7 @@ const initMap = (centerCoordinates, deviceCoordinates = null) => {
   map.value.on('load', () => {
     formatCenterText(map.value.getCenter())
     if (deviceCoordinates) {
+      deviceCoords.value = deviceCoordinates
       formatDeviceText(deviceCoordinates)
       addDeviceMarker(deviceCoordinates)
     }
@@ -321,6 +474,8 @@ const initMap = (centerCoordinates, deviceCoordinates = null) => {
       flyToLocation(pendingFlyTarget)
       pendingFlyTarget = null
     }
+    // Trigger an initial search once the map has finished loading
+    executeMoveLogic()
   })
 
   // 4. 核心事件监听：当地图停止移动（拖拽、缩放结束）时触发
@@ -337,6 +492,12 @@ const initMap = (centerCoordinates, deviceCoordinates = null) => {
 onBeforeUnmount(() => {
   if (map.value) {
     map.value.remove()
+  }
+  try {
+    const mq = window.matchMedia('(max-width: 640px)')
+    mq.removeEventListener('change', updateIsMobile)
+  } catch (e) {
+    try { mq.removeListener(updateIsMobile) } catch (er) { /* ignore */ }
   }
 })
 </script>
@@ -411,6 +572,61 @@ onBeforeUnmount(() => {
   box-shadow: 0 18px 30px rgba(0, 0, 0, 0.08);
   backdrop-filter: blur(12px);
   animation: fadeInUp 0.45s ease-out both;
+}
+
+/* Right-hand shop list styles */
+.shop-list {
+  position: absolute;
+  top: var(--map-overlay-top);
+  right: 20px;
+  width: 420px;
+  max-height: calc(100vh - 7rem);
+  background: rgba(255,255,255,0.95);
+  border-radius: 12px;
+  box-shadow: 0 18px 30px rgba(0,0,0,0.08);
+  overflow: auto;
+  z-index: 16;
+  padding: 10px;
+}
+.shop-list-header {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.shop-list-items { list-style: none; margin: 0; padding: 0; }
+.shop-list-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid rgba(0,0,0,0.04); cursor: pointer; }
+.shop-list-item:hover { background: rgba(0,0,0,0.02); }
+.shop-name { font-size: 13px; font-weight: 700; }
+.shop-desc { font-size: 12px; color: #6b7280; margin-top: 4px; }
+.shop-item-left { max-width: 70%; }
+.shop-item-right { font-weight: 700; color: var(--accent); }
+.shop-list-loading { padding: 8px; text-align: center; color: #666; font-size: 13px; }
+
+/* Inline title with small pill buttons */
+.shop-header-title.inline { display: flex; align-items: center; gap: 10px; justify-content: center; font-size: 16px; font-weight: 700; }
+.inline-btn { appearance: none; -webkit-appearance: none; border: none; padding: 6px 12px; border-radius: 999px; background: rgba(0,0,0,0.08); color: #111827; font-weight: 700; cursor: pointer; }
+.inline-btn.active { background: var(--accent); color: white; box-shadow: 0 6px 18px rgba(17,24,39,0.08); }
+.inline-btn.disabled { opacity: 0.45; cursor: not-allowed; }
+.sep { color: rgba(0,0,0,0.35); margin: 0 6px; }
+.shop-header-title .highlight { color: var(--accent); }
+
+.load-more-btn {
+  background: transparent;
+  border: 1px solid rgba(0,0,0,0.06);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-weight: 700;
+  color: var(--accent);
+  cursor: pointer;
+}
+.load-more-btn:hover { background: rgba(0,0,0,0.03); }
+
+/* Mobile switch buttons */
+.mobile-switch { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 60; display: none; gap: 8px; }
+.mobile-switch button { padding: 8px 14px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.06); background: white; font-weight: 700; }
+.mobile-switch button.active { background: var(--accent); color: white; }
+
+@media (max-width: 640px) {
+  .mobile-switch { display: flex; }
 }
 
 .coord-title {
